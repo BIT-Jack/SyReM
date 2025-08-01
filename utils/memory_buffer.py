@@ -80,8 +80,6 @@ class Buffer:
         cos_sim = F.cosine_similarity(g, G, dim=1)
         sorted_values, sorted_id = torch.sort(cos_sim, descending=True)
         sorted_seq = [indices[i] for i in sorted_id]
-        # print("余弦相似度排序结果:", sorted_values.tolist())
-        # print("重新排序的序列:", sorted_seq)
 
         tmp = cos_sim.max().item()+1
         c_score = max(c_score, tmp)

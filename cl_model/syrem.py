@@ -3,7 +3,7 @@ import torch
 from torch.optim import Adam
 from cl_model.agem import overwrite_grad, store_grad
 from cl_model.continual_model import ContinualModel
-from utils.derpp_buffer_new import Buffer
+from utils.memory_buffer import Buffer
 from torch import nn
 
 def get_parser(parser):
