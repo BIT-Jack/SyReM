@@ -154,4 +154,4 @@ python test_joint.py
 # Contact
 Please feel free to contact our main contributors if you have any questions or suggestions!
 
-Yunlong Lin (jacklyl.bit@gmail.com)
+Yunlong Lin (Email: jacklyl.bit@gmail.com)
