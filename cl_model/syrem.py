@@ -80,14 +80,14 @@ class AGemRPe(nn.Module):
             p = self.net.forward(inputs)
             loss = self.loss(p, labels)
 
-            # plasticity enhancement, random = True when running the ablation experiment
+            # plasticity enhancement, random = True when running the ablation experiment (i.e., SyReM-R)
             buf_inputs, buf_labels, replayed_info, replayed_score = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=False, record=id_bc, flag_of_new_task=current_loader)
             buf_outputs = self.net.forward(buf_inputs)
             loss += self.loss(buf_outputs, buf_labels)
 
             loss.backward()
             
-            # A-GEM algorithm
+            
             store_grad(self.parameters, self.grad_xy, self.grad_dims)
 
             buf_inputs, buf_labels, _, _ = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=True)
