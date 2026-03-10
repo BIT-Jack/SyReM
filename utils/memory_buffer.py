@@ -29,7 +29,7 @@ def reservoir(num_seen_examples: int, buffer_size: int) -> int:
 class Buffer:
 
 
-    def __init__(self, buffer_size, device, minibatch_size, model_name, model=None, mode='reservoir'):
+    def __init__(self, buffer_size, device, minibatch_size, model_name, model=None, mode='reservoir', candidate_num = None):
         assert mode in ('ring', 'reservoir')
         self.buffer_size = buffer_size
         self.device = device
@@ -37,11 +37,19 @@ class Buffer:
         self.functional_index = eval(mode)
         self.model_name = model_name
         self.model = model
+        self.current_size = 0
+
+        self.cache = {}
+        self.fathom = 0
+        self.fathom_mask = None
 
         self.minibatch_size = minibatch_size
-        self.comparing_candidate = 2*minibatch_size
+        self.comparing_candidate = candidate_num
 
-        self.attributes = ['examples', 'labels', 'logits', 'task_labels']
+        # print("Mini Batch Size:", minibatch_size)
+        print("----------=============number of Candidates:", self.comparing_candidate)
+
+        self.attributes = ['examples', 'labels', 'logits']
 
         self.memory_data = [[0]*self.buffer_size]
         #key is the sample id in the buffer, value is the task id
@@ -49,6 +57,7 @@ class Buffer:
 
 
         self.online_sort = list(range(self.minibatch_size))
+        self.online_sort_div = list(range(self.minibatch_size))
 
     def to(self, device):
         self.device = device
@@ -71,7 +80,6 @@ class Buffer:
             bfx = tuple(tensor[bc].unsqueeze(0) for  tensor in X)
             bfy = tuple(tensor[bc].unsqueeze(0) for tensor in Y)
             grd = self.model.get_grads(bfx, bfy)
-            # self.cache[idx] = grd
             G.append(grd)
         G = torch.cat(G).to(g.device)
         c_score = 0
@@ -84,16 +92,71 @@ class Buffer:
         tmp = cos_sim.max().item()+1
         c_score = max(c_score, tmp)
 
+        k = min(self.comparing_candidate, self.num_seen_examples)
 
+        top_sim = sorted_seq[:k]     
+        top_dissim = sorted_seq[-k:]
+                
+
+        # return c_score, sorted_seq[:min(self.minibatch_size, self.num_seen_examples)]
+        return c_score, top_sim, top_dissim
+    
+    def get_grad_score_gss(self, x, y, X, Y, indices):
+        indices = np.array(indices[0])
+        g = self.model.get_grads(x, y) # input-groundtruth
+        G = []
+        # Compute the loss of the samples from buffer
+        for bc in range(len(indices)):
+            for idx in indices:
+                if idx in self.cache:
+                    grd = self.cache[idx]
+                else:
+                    bfx = tuple(tensor[bc].unsqueeze(0) for  tensor in X)
+                    bfy = tuple(tensor[bc].unsqueeze(0) for tensor in Y)
+                    grd = self.model.get_grads(bfx, bfy)
+                    self.cache[idx] = grd
+                G.append(grd)
+        G = torch.cat(G).to(g.device)
+        c_score = 0
+        grads_at_a_time = 5
+        
         # let's split this so your gpu does not melt. You're welcome.
-        # for it in range(int(np.ceil(G.shape[0] / grads_at_a_time))):
-        #     tmp = F.cosine_similarity(g, G[it*grads_at_a_time: (it+1)*grads_at_a_time], dim=1).max().item() + 1 
-        #     c_score = max(c_score, tmp)
-        return c_score, sorted_seq[:min(self.minibatch_size, self.num_seen_examples)]
+        for it in range(int(np.ceil(G.shape[0] / grads_at_a_time))):
+            tmp = F.cosine_similarity(g, G[it*grads_at_a_time: (it+1)*grads_at_a_time], dim=1).max().item() + 1 
+            c_score = max(c_score, tmp)
+        return c_score
+    
+    def reset_fathom(self):
+        self.fathom = 0
+        self.fathom_mask = torch.randperm(min(self.num_seen_examples, self.examples[0].shape[0] if hasattr(self, 'examples') else self.num_seen_examples))
 
+    
+
+
+    def functional_reservoir(self, x, y, batch_c, bigX=None, bigY=None, indices=None):
+        if self.num_seen_examples < self.buffer_size:
+            return self.num_seen_examples, batch_c
+
+        elif batch_c < 1:
+            crx = tuple(x_tmp.unsqueeze(0) for x_tmp in x)
+            cry = tuple(y_tmp.unsqueeze(0) for y_tmp in y)
+            single_c = self.get_grad_score_gss(crx, cry, bigX, bigY, indices)
+            s = self.scores.cpu().numpy()
+            pp=s / s.sum()
+            i = np.random.choice(np.arange(0, self.buffer_size), size=1, p=pp)[0]
+            rand = np.random.rand(1)[0]
+            # print(rand, s[i] / (s[i] + c))
+            if rand < s[i] / (s[i] + single_c):
+                return i, single_c
+
+        return -1, 0
+
+
+    def drop_cache(self):
+        self.cache = {}
 
     def init_tensors(self, examples: tuple, labels: torch.Tensor,
-                     logits: tuple, task_labels: torch.Tensor) -> None:
+                     logits: tuple) -> None:
 
 
         for attr_str in self.attributes:
@@ -108,35 +171,34 @@ class Buffer:
                             *attr[ii].shape[1:]), dtype=typ, device=self.device))
                     self.examples = tuple(self.examples)
                 
-                if self.model_name == "b2p" or self.model_name == "gem" or "agem" in self.model_name:
+                if "agem" or "syrem" in self.model_name:
                     if attr_str == 'labels':
                         for ii in range(len(attr)):
                             self.labels.append(torch.zeros((self.buffer_size,
                                 *attr[ii].shape[1:]), dtype=typ, device=self.device))
-                        self.labels = tuple(self.labels)          
+                        self.labels = tuple(self.labels)
+                        self.scores = torch.zeros((self.buffer_size,*attr[0].shape[1:]),
+                                            dtype=torch.float32, device=self.device)          
 
                 if self.model_name ==  "b2p" or "der" in self.model_name:
                     if attr_str == 'logits':
                         self.logits = torch.zeros((self.buffer_size,
                                 *attr.shape[1:]), dtype=typ, device=self.device)
-                        
-                if self.model_name == "gem":
-                        if attr_str == 'task_labels':
-                            self.task_labels = torch.zeros((self.buffer_size,
-                                *attr.shape[1:]), dtype=typ, device=self.device)
 
-    def add_data(self, examples, labels=None, logits=None, task_labels=None, task_order=None):
+
+    def add_data(self, examples, labels=None, logits=None,  task_order=None, if_sim=True):
         
         if self.num_seen_examples > 0:
             bigX, bigY, indices = self.get_data(min(self.comparing_candidate, self.num_seen_examples), return_index=True,
                                                 random=True)
-            _, sort = self.get_grad_score(examples, labels, bigX, bigY, indices)
-            self.online_sort = sort
+            _, sort_sim, sort_dissim = self.get_grad_score(examples, labels, bigX, bigY, indices)
 
+            self.online_sort = sort_sim
+            self.online_sort_div = sort_dissim
 
 
         if not hasattr(self, 'examples'):
-            self.init_tensors(examples, labels, logits, task_labels)
+            self.init_tensors(examples, labels, logits)
         for i in range(examples[0].shape[0]): 
             index = reservoir(self.num_seen_examples, self.buffer_size)
             self.num_seen_examples += 1
@@ -157,17 +219,71 @@ class Buffer:
                 if logits is not None:
                     self.logits[index] = logits[i].to(self.device)
 
-                if task_labels is not None:
-                    self.task_labels[index] = task_labels[i].to(self.device)
             else:
                 if task_order is not None:
                    self.memory_recording(index, task_order)
+        self.current_size = min(self.num_seen_examples, self.buffer_size)
+
+
+    def add_data_gss(self, examples, labels=None, logits=None, task_id=None, record_list=None):
+
+        if not hasattr(self, 'examples'):
+            self.init_tensors(examples, labels, logits)
+        
+        # compute buffer score
+        if self.num_seen_examples > 0:
+            bigX, bigY, indices = self.get_data_gss(min(self.minibatch_size, self.num_seen_examples), give_index=True,
+                                                random=True)
+            # c = self.get_grad_score_gss(examples, labels, bigX, bigY, indices)
+            c, sort_sim, sort_dissim = self.get_grad_score(examples, labels, bigX, bigY, indices)
+
+            self.online_sort = sort_sim
+            self.online_sort_div = sort_dissim
+
+        else:
+            bigX, bigY, indices = None, None, None
+            c = 0.1
+
+        for i in range(examples[0].shape[0]):
+            new_example_tuple = ()
+            new_label_tuple = ()
+            for ex in examples:
+                new_example_tuple += (ex[i],)
+            for lb in labels:
+                new_label_tuple += (lb[i],)
+
+
+            index, score = self.functional_reservoir(new_example_tuple, new_label_tuple, c, bigX, bigY, indices)
+            
+            self.num_seen_examples += 1
+
+
+            # record the replayed data for further analysis
+            if task_id is not None:
+                # self.memory_recording(index, task_id, self.changed_order)   # record each training step
+                record_list[index] = task_id
+            
+            if index >= 0:
+
+                for ii in range(len(self.examples)):
+                    self.examples[ii][index] = examples[ii][i].detach().to(self.device)
+                if labels is not None:
+                    for jj in range(len(self.labels)):
+                        self.labels[jj][index] = labels[jj][i].detach().to(self.device)
+                if logits is not None:
+                    self.logits[index] = logits[i].to(self.device)               
+            
+                
+                self.scores[index] = score
+                if index in self.cache:
+                    del self.cache[index]
+            
 
                 
 
 
 
-    def get_data(self, size: int, transform: nn.Module = None, return_index=False, random=False) -> Tuple:
+    def get_data(self, size: int, transform: nn.Module = None, return_index=False, random=False, gp_rd = True) -> Tuple:
 
 
         if size > min(self.num_seen_examples, self.examples[0].shape[0]): 
@@ -178,7 +294,10 @@ class Buffer:
             choice = np.random.choice(min(self.num_seen_examples, self.examples[0].shape[0]),
                                   size=size, replace=False)
         else:
-            choice = self.online_sort
+            if gp_rd:
+                choice = self.online_sort
+            else:
+                choice = self.online_sort_div
         # choice = np.random.choice(min(self.num_seen_examples, self.examples[0].shape[0]),
         #                           size=size, replace=False)
         ret_task_id_list = [self.task_id_dict[key] for key in choice if key in self.task_id_dict]
@@ -220,6 +339,62 @@ class Buffer:
             ret_tuple = (example_ret_tuple_tmp, label_ret_tuple_tmp)
             return ret_tuple
 
+
+    def get_data_gss(self, size: int, transform: nn.Module = None, give_index=False, random=False) -> Tuple:
+        """
+        Random samples a batch of size items.
+        :param size: the number of requested items
+        """
+
+        if size > self.examples[0].shape[0]:
+            size = self.examples[0].shape[0]
+
+        if random:
+            choice = np.random.choice(min(self.num_seen_examples, self.examples[0].shape[0]),
+                                size=min(size, self.num_seen_examples),
+                                replace=False)
+        else:
+            choice = np.arange(self.fathom, min(self.fathom + size, self.examples[0].shape[0], self.num_seen_examples))
+            choice = self.fathom_mask[choice]
+            self.fathom += len(choice)
+            if self.fathom >= self.examples[0].shape[0] or self.fathom >= self.num_seen_examples:
+                self.fathom = 0
+        if transform is None: transform = lambda x: x
+        
+        # To create the tuple to return
+        ret_list = [0 for _ in range(len(self.examples))]
+        for id_ex in range(len(self.examples)):
+            ret_list[id_ex] = (torch.stack([transform(ee.cpu()) for ee in self.examples[id_ex][choice]]).to(self.device),) 
+    
+        # Replace the sub-tuple as tensors
+        ret_tuple_tmp = tuple(ret_list)
+        example_ret_tuple_tmp = ()
+        for st in ret_tuple_tmp:
+            example_ret_tuple_tmp += st        
+        
+
+
+        label_ret_tuple_tmp = ()
+        for attr_str in self.attributes[1:]:#The 1st is "labels"
+            if attr_str=='labels':
+                if hasattr(self, attr_str):
+                    attr = getattr(self, attr_str)
+                    for jj in range(len(self.labels)): 
+                        label_ret_tuple_tmp +=(attr[jj][choice],) 
+
+    
+        index_ret_tuple_tmp = ()
+
+
+        if give_index:
+            # print("give index, True")
+            index_ret_tuple_tmp += (choice,)
+            ret_tuple = (example_ret_tuple_tmp, label_ret_tuple_tmp, index_ret_tuple_tmp)
+        else:
+
+            ret_tuple = (example_ret_tuple_tmp, label_ret_tuple_tmp)
+
+        return ret_tuple
         
 
 
@@ -230,12 +405,28 @@ class Buffer:
         """
         if transform is None:
             def transform(x): return x
-        ret_tuple = (torch.stack([transform(ee.cpu())
-                                  for ee in self.examples[indexes]]).to(self.device),)
-        for attr_str in self.attributes[1:]:
-            if hasattr(self, attr_str):
-                attr = getattr(self, attr_str).to(self.device)
-                ret_tuple += (attr[indexes],)
+
+        ret_list = [0 for _ in range(len(self.examples))]
+        for id_ex in range(len(self.examples)):
+            ret_list[id_ex] = (torch.stack([transform(ee.cpu()) for ee in self.examples[id_ex][indexes]]).to(self.device),)
+        
+        ret_tuple_tmp = tuple(ret_list)
+        example_ret_tuple_tmp = ()
+        for st in ret_tuple_tmp:
+            example_ret_tuple_tmp += st
+
+        label_ret_tuple_tmp = ()
+        attr_str = self.attributes[1]
+
+
+
+        if hasattr(self, attr_str):
+            attr = getattr(self, attr_str)
+            for jj in range(len(self.labels)):
+                label_ret_tuple_tmp += (attr[jj][indexes],)
+
+        ret_tuple = (example_ret_tuple_tmp, label_ret_tuple_tmp)
+
         return ret_tuple
 
     def is_empty(self) -> bool:

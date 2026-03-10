@@ -19,7 +19,7 @@ from traj_predictor.interaction_model import UQnet
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
-
+import time
 
 import torch
 from torch import nn, Tensor
@@ -32,11 +32,14 @@ from traj_predictor.utils import *
 from cl_data_stream.seq_dataset import *
 from traj_predictor.losses import *
 
+import os
+import pickle
+
 def prediction_test(model, scenarioname,  dataset, para, 
                     test, return_heatmap, 
                     mode, batch_size, cl_method_name, trained_to, args):
     
-    print(str(cl_method_name),": into CL TESTING now...")
+    print(str(cl_method_name),": into CL TESTING now...", "batch size in test:", batch_size)
     H = []
     Ua = []
     Ue = []
@@ -64,6 +67,11 @@ def prediction_test(model, scenarioname,  dataset, para,
     Li = []
     #Tr is to store the traj for plotting
     Tr = []
+
+    #////////////////Revision: inference time
+    inference_time_list = []
+    device = args.device
+    #////////////////
     for k, data in enumerate(loader):
         if mode=='lanescore':
             if not test:
@@ -71,7 +79,20 @@ def prediction_test(model, scenarioname,  dataset, para,
             else:
                 traj, splines, masker, lanefeature, adj, af, ar, c_mask = data
             inputs = (traj, splines, masker, lanefeature, adj, af, ar, c_mask)
+
+            # ---- inference timing start ----
+            torch.cuda.synchronize(device)
+            start_time = time.time()
+
             lsp, heatmap = model(inputs)
+
+            torch.cuda.synchronize(device)
+            infer_time = time.time() - start_time
+            infer_time_ms = infer_time * 1000
+            inference_time_list.append(infer_time_ms)
+            # ---- inference timing end ----
+
+
             Hi.append(heatmap.detach().to('cpu').numpy())
             Li.append(lsp.detach().to('cpu').numpy())
             # if args.store_traj:
@@ -82,7 +103,45 @@ def prediction_test(model, scenarioname,  dataset, para,
     # if args.store_traj:
     # # concatenate all batches of traj
     #     Tr = np.concatenate(Tr, 0) # (number of cases, 26, 9, 8)
-        
+    
+    #////////////////Revision: inference time
+    avg_infer_time = np.mean(inference_time_list)
+    std_infer_time = np.std(inference_time_list)
+    print("Inference time / batch:", avg_infer_time, "±", std_infer_time, " ms")
+    
+
+
+    # Construct result dictionary
+    infer_time_record = {
+        "avg_infer_time_ms": round(avg_infer_time, 2),
+        "std_infer_time_ms": round(std_infer_time, 2),
+        "model": args.model,
+        "buffer_size": args.buffer_size,
+        "scenario_tested": scenarioname
+    }
+
+    # Save directory
+    save_dir = "./logging/inference_time"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Base file name
+    base_name = f"{args.model}_bf_{args.buffer_size}_tested_in_{scenarioname}"
+
+    # ==== TXT (human-readable) ====
+    txt_path = os.path.join(save_dir, base_name + ".txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(
+            
+            f"Model: {args.model}\n"
+            f"Buffer size: {args.buffer_size}\n"
+            f"Inference time / batch: {infer_time_record['avg_infer_time_ms']:.2f} ± {infer_time_record['std_infer_time_ms']:.2f} ms\n"
+        )
+
+    # ==== PKL (for program processing) ====
+    pkl_path = os.path.join(save_dir, base_name + ".pkl")
+    with open(pkl_path, "wb") as f:
+        pickle.dump(infer_time_record, f)
+    #////////////////
     
     Hp.append(Hi)
     Lp.append(Li)

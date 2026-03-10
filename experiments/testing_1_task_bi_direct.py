@@ -22,7 +22,7 @@ from utils.metrics import *
 def test_1_task(learned_num, args):
     # learned_num = from 1
     cl_method_name = args.model
-    scenario_info = args.scenario_info
+    scenario_info = scenario_info_set[args.task_order_id]
     
     result_log = open(result_dir+'/After_'+str(learned_num)+'_CL_tasks_'+ cl_method_name+'_bf_'+str(args.buffer_size) + '.txt','w')
     fde_list = []
@@ -45,11 +45,11 @@ def test_1_task(learned_num, args):
         testset = InteractionDataset(['val'], scenario_name,'val', paralist, mode=paralist['mode'], filters=False) # for validation
          
         if not cl_method_name=='joint':
-            model.encoder.load_state_dict(torch.load(saved_dir+'/'+args.model+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_encoder'+'.pt'))
-            model.decoder.load_state_dict(torch.load(saved_dir+'/'+args.model+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_decoder'+'.pt'))
+            model.encoder.load_state_dict(torch.load(saved_dir+'/'+args.model+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_encoder'+'.pt', map_location='cuda:0'))
+            model.decoder.load_state_dict(torch.load(saved_dir+'/'+args.model+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_decoder'+'.pt', map_location='cuda:0'))
         else:
-            model.encoder.load_state_dict(torch.load(saved_dir+'/'+'joint'+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_encoder'+'.pt'))
-            model.decoder.load_state_dict(torch.load(saved_dir+'/'+'joint'+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_decoder'+'.pt'))
+            model.encoder.load_state_dict(torch.load(saved_dir+'/'+'joint'+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_encoder'+'.pt', map_location='cuda:0'))
+            model.decoder.load_state_dict(torch.load(saved_dir+'/'+'joint'+'_'+'tasks_'+str(learned_num)+'_'+'bf_'+str(args.buffer_size)+'_decoder'+'.pt', map_location='cuda:0'))
         model.eval()
 
         Yp, Ua, Um, Y = prediction_test(model,

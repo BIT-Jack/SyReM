@@ -19,7 +19,7 @@ logging.warning('Worrying Stuff')
 import argparse
 from utils.metrics import *
 from experiments.testing_1_task_bi_direct import *
-from utils.args_loading import scenario_info
+from utils.args_loading import *
 import pickle
 
 def main():
@@ -33,9 +33,10 @@ def main():
     parser.add_argument('--store_traj', type=bool, default=False,
                         help='turn True to store observed trajectories and predicted results')
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    parser.add_argument('--task_order_id', type=int, default= 0)
     parser.add_argument('--device', type=str, default= device)
     args = parser.parse_args()
-    args.scenario_info = scenario_info
+    
 
     print("args.num_tasks:", args.num_tasks)
     # print("args.continual_learning:", args.continual_learning)
