@@ -1,51 +1,10 @@
 import numpy as np
 import torch
 from torch.optim import Adam
-# from cl_model.gem import overwrite_grad, store_grad
+from cl_model.vgp import overwrite_grad, store_grad
 from cl_model.continual_model import ContinualModel
 from utils.memory_buffer import Buffer
 from torch import nn
-
-
-
-def store_grad(params, grads, grad_dims):
-    """
-        This stores parameter gradients of past tasks.
-        pp: parameters
-        grads: gradients
-        grad_dims: list with number of parameters per layers
-    """
-    # store the gradients
-    grads.fill_(0.0)
-    count = 0
-    for param in params():
-        if param.grad is not None:
-            begin = 0 if count == 0 else sum(grad_dims[:count])
-            end = np.sum(grad_dims[:count + 1])
-            grads[begin: end].copy_(param.grad.data.view(-1))
-        count += 1
-
-
-def overwrite_grad(params, newgrad, grad_dims):
-    """
-        This is used to overwrite the gradients with a new gradient
-        vector, whenever violations occur.
-        pp: parameters
-        newgrad: corrected gradient
-        grad_dims: list storing number of parameters at each layer
-    """
-    count = 0
-    for param in params():
-        if param.grad is not None:
-            begin = 0 if count == 0 else sum(grad_dims[:count])
-            end = sum(grad_dims[:count + 1])
-            this_grad = newgrad[begin: end].contiguous().view(
-                param.grad.data.size())
-            param.grad.data.copy_(this_grad)
-        count += 1
-
-
-
 
 def get_parser(parser):
     return parser
@@ -57,12 +16,12 @@ def project(gxy: torch.Tensor, ger: torch.Tensor) -> torch.Tensor:
     return gxy - corr * ger
 
 
-class AGemR(nn.Module):
-    NAME = 'agem_r'
+class VSR(nn.Module):
+    NAME = 'vsr'
     COMPATIBILITY = ['domain-il']
 
     def __init__(self, backbone, loss, args):
-        super(AGemR, self).__init__()
+        super(VSR, self).__init__()
         self.net = backbone
         self.loss = loss
         self.args = args
@@ -72,7 +31,7 @@ class AGemR(nn.Module):
 
         self.buffer = Buffer(self.args.buffer_size, self.device, self.args.gss_minibatch_size if
                              self.args.gss_minibatch_size is not None
-                             else self.args.minibatch_size, self.NAME, self)
+                             else self.args.minibatch_size, self.NAME, self, candidate_num=self.args.num_candidate)
         self.grad_dims = []
         for param in self.parameters():
             self.grad_dims.append(param.data.numel())
@@ -106,12 +65,14 @@ class AGemR(nn.Module):
     #         self.buffer.add_data(examples= cur_x,labels=cur_y)
 
 
-    def observe(self, inputs, labels, task_id=None, record_list=None):
+    def observe(self, inputs, labels, id_bc=None, current_loader = None):
 
         if self.buffer.is_empty():
             self.zero_grad()
             p = self.net.forward(inputs)
             loss = self.loss(p, labels)
+            replayed_info = None
+            replayed_score = None
             loss.backward()
 
         else:
@@ -119,32 +80,39 @@ class AGemR(nn.Module):
             p = self.net.forward(inputs)
             loss = self.loss(p, labels)
 
-            # plasticity enhancement is not used in agem_r, as a baseline for comparison
+            # plasticity enhancement, random = True when running the ablation experiment (i.e., SyReM-R)
             buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=False)
+            # buf_inputs, buf_labels, replayed_info, replayed_score = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=False)
             buf_outputs = self.net.forward(buf_inputs)
             loss += self.loss(buf_outputs, buf_labels)
 
             loss.backward()
             
-            # A-GEM algorithm
-            store_grad(self.parameters, self.grad_xy, self.grad_dims)
+            # Inactivate the GP module, thus, this VanillaSR is an ABLATION method of SyReM (w/o GP)
+            # store_grad(self.parameters, self.grad_xy, self.grad_dims)
 
-            buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=True)
-            self.net.zero_grad()
-            buf_outputs = self.net.forward(buf_inputs)
-            penalty = self.loss(buf_outputs, buf_labels)
-            penalty.backward()
-            store_grad(self.parameters, self.grad_er, self.grad_dims)
+            # buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=True)
+            # self.net.zero_grad()
+            # buf_outputs = self.net.forward(buf_inputs)
+            # penalty = self.loss(buf_outputs, buf_labels)
+            # penalty.backward()
+            # store_grad(self.parameters, self.grad_er, self.grad_dims)
 
-            dot_prod = torch.dot(self.grad_xy, self.grad_er)
-            if dot_prod.item() < 0:
-                g_tilde = project(gxy=self.grad_xy, ger=self.grad_er)
-                overwrite_grad(self.parameters, g_tilde, self.grad_dims)
-            else:
-                overwrite_grad(self.parameters, self.grad_xy, self.grad_dims)
+            # dot_prod = torch.dot(self.grad_xy, self.grad_er)
+            # if dot_prod.item() < 0:
+            #     g_tilde = project(gxy=self.grad_xy, ger=self.grad_er)
+            #     overwrite_grad(self.parameters, g_tilde, self.grad_dims)
+            # else:
+            #     overwrite_grad(self.parameters, self.grad_xy, self.grad_dims)
 
         self.opt.step()
 
-        self.buffer.add_data(examples=inputs, labels=labels)
+        if id_bc is None:
+            self.buffer.add_data(examples=inputs, labels=labels)
+        else:
+            self.buffer.add_data(examples=inputs, labels=labels, samples_id=id_bc)
 
-        return loss.item()
+        if id_bc is None:
+            return loss.item()
+        else:
+            return loss.item(), replayed_info, replayed_score

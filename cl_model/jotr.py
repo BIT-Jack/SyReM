@@ -9,12 +9,12 @@ def get_parser(parser):
 
 
 
-class Joint(nn.Module):
-    NAME = 'joint'
+class JoTr(nn.Module):
+    NAME = 'jotr'
     COMPATIBILITY = ['domain-il']
 
     def __init__(self, backbone, loss, args):
-        super(Joint, self).__init__()
+        super(JoTr, self).__init__()
         self.net = backbone
         self.loss = loss
         self.args = args

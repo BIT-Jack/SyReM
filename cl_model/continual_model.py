@@ -19,14 +19,16 @@ class ContinualModel(nn.Module):
     COMPATIBILITY: List[str]
 
     def __init__(self, backbone: nn.Module, loss: nn.Module,
-                 args: Namespace, transform: nn.Module) -> None:
+                 args: Namespace) -> None:
         super(ContinualModel, self).__init__()
 
         self.net = backbone
         self.loss = loss
         self.args = args
-        self.transform = transform
+        # self.transform = transform
         self.opt = Adam(self.net.parameters(), lr=self.args.lr)
+
+        self.old_net = None
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -53,3 +55,7 @@ class ContinualModel(nn.Module):
         :return: the value of the loss function
         """
         raise NotImplementedError
+    
+    def meta_flashback(self,initial_teacher, primary_new_model,*args, **kwargs):
+        ret = self.flashback(initial_teacher, primary_new_model,*args, **kwargs)
+        return ret

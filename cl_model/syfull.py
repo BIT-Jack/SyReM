@@ -5,6 +5,7 @@ from cl_model.vgp import overwrite_grad, store_grad
 from cl_model.continual_model import ContinualModel
 from utils.memory_buffer import Buffer
 from torch import nn
+import math
 
 def get_parser(parser):
     return parser
@@ -16,12 +17,12 @@ def project(gxy: torch.Tensor, ger: torch.Tensor) -> torch.Tensor:
     return gxy - corr * ger
 
 
-class SyReM(nn.Module):
-    NAME = 'syrem'
+class Syfull(nn.Module):
+    NAME = 'syfull'
     COMPATIBILITY = ['domain-il']
 
     def __init__(self, backbone, loss, args):
-        super(SyReM, self).__init__()
+        super(Syfull, self).__init__()
         self.net = backbone
         self.loss = loss
         self.args = args
@@ -53,56 +54,67 @@ class SyReM(nn.Module):
         return grads
 
 
+    def observe(self, inputs, labels, id_bc=None, current_loader=None):
 
+        self.zero_grad()
 
-    def observe(self, inputs, labels, id_bc=None, current_loader = None):
+        # ========== 1. Current batch ==========
+        p = self.net(inputs)
+        cur_loss = self.loss(p, labels)
+        cur_loss.backward()   #
 
-        if self.buffer.is_empty():
-            self.zero_grad()
-            p = self.net.forward(inputs)
-            loss = self.loss(p, labels)
-            replayed_info = None
-            replayed_score = None
-            loss.backward()
+        # ========== 2. Entire buffer replay (upper bound) ==========
+        if not self.buffer.is_empty():
+            num_valid = self.buffer.current_size
+            num_batches = math.ceil(num_valid / self.args.batch_size)
 
-        else:
-            self.zero_grad()
-            p = self.net.forward(inputs)
-            loss = self.loss(p, labels)
+            for ii in range(num_batches):
+                start = ii * self.args.batch_size
+                end = min(start + self.args.batch_size, num_valid)
+                indices = list(range(start, end))
 
-            # plasticity enhancement, random = True when running the ablation experiment 
-            buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=False)
-            # buf_inputs, buf_labels, replayed_info, replayed_score = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=False)
-            buf_outputs = self.net.forward(buf_inputs)
-            loss += self.loss(buf_outputs, buf_labels)
+                buf_inputs, buf_labels = self.buffer.get_data_by_index(
+                    indices, transform=self.transform
+                )
 
-            loss.backward()
-            
-            
+                buf_outputs = self.net(buf_inputs)
+                replay_loss = self.loss(buf_outputs, buf_labels)
+
+                replay_loss.backward()   # batch backward one by one
+
+            # ========== 3. Store plasticity gradient ==========
             store_grad(self.parameters, self.grad_xy, self.grad_dims)
 
-            buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, return_index=False, random=True)
+            # ========== 4. ER gradient for constraint ==========
+            buf_inputs, buf_labels = self.buffer.get_data(
+                self.args.minibatch_size,
+                transform=self.transform,
+                return_index=False,
+                random=True
+            )
+
             self.net.zero_grad()
-            buf_outputs = self.net.forward(buf_inputs)
+            buf_outputs = self.net(buf_inputs)
             penalty = self.loss(buf_outputs, buf_labels)
             penalty.backward()
             store_grad(self.parameters, self.grad_er, self.grad_dims)
 
+            # ========== 5. Gradient projection ==========
             dot_prod = torch.dot(self.grad_xy, self.grad_er)
+
             if dot_prod.item() < 0:
                 g_tilde = project(gxy=self.grad_xy, ger=self.grad_er)
                 overwrite_grad(self.parameters, g_tilde, self.grad_dims)
             else:
                 overwrite_grad(self.parameters, self.grad_xy, self.grad_dims)
 
+        # ========== 6. Optimizer step ==========
         self.opt.step()
 
+        # ========== 7. Buffer update ==========
         if id_bc is None:
             self.buffer.add_data(examples=inputs, labels=labels)
         else:
             self.buffer.add_data(examples=inputs, labels=labels, samples_id=id_bc)
 
-        if id_bc is None:
-            return loss.item()
-        else:
-            return loss.item(), replayed_info, replayed_score
+        return cur_loss.item()
