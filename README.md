@@ -6,6 +6,19 @@ Official codes for the paper ''_Escaping Stability-Plasticity Dilemma in Online 
 # Paper
 The paper is available at [IEEE TNNLS early access](https://ieeexplore.ieee.org/document/11559107).
 
+Citation:
+```text
+@ARTICLE{11559107,
+  author={Lin, Yunlong and Lu, Chao and Wu, Tongshuai and Zhao, Xiaocong and Du, Guodong and Sun, Yanwei and Li, Zirui and Gong, Jianwei},
+  journal={IEEE Transactions on Neural Networks and Learning Systems}, 
+  title={Escaping Stability-Plasticity Dilemma in Online Continual Learning for Motion Forecasting via Synergetic Memory Rehearsal}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={1-15},
+  keywords={Learning (artificial intelligence);Memory;Stability plasticity;Modeling;Stability;Forecasting;Training;Continuing education;Current;Educational institutions;Artificial neuroplasticity;autonomous driving (AD);catastrophic forgetting;memory rehearsal;motion forecasting;online continual learning (CL)},
+  doi={10.1109/TNNLS.2026.3700190}}
+```
 
 # Dataset
 ## Original Dataset
