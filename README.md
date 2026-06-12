@@ -1,6 +1,10 @@
 # SyReM
 
-Official codes for the paper ''_Escaping Stability-Plasticity Dilemma in Online Continual Learning for Motion Forecasting via Synergetic Memory Rehearsal_'', Yunlong Lin, Chao Lu, Tongshuai Wu, Xiaocong Zhao, Guodong Du, Yanwei Sun, Zirui Li, and Jianwei Gong.
+Official codes for the paper ''_Escaping Stability-Plasticity Dilemma in Online Continual Learning for Motion Forecasting via Synergetic Memory Rehearsal_'', Yunlong Lin, Chao Lu, Tongshuai Wu, Xiaocong Zhao, Guodong Du, Yanwei Sun, Zirui Li, and Jianwei Gong. The paper has been accepted by the journal _IEEE Transactions on Neural Networks and Learning Systems (TNNLS)_.
+
+
+# Paper
+The paper is available at [IEEE TNNLS early access](https://ieeexplore.ieee.org/document/11559107).
 
 
 # Dataset
